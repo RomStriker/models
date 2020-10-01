@@ -27,6 +27,7 @@ import tensorflow.compat.v2 as tf2
 import tf_slim as slim
 import tensorflow.logging as logging
 import glob
+import shutil
 
 from object_detection import eval_util
 from object_detection import exporter as exporter_lib
