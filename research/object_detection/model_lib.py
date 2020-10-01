@@ -860,10 +860,9 @@ class BestCheckpointsExporter(tf.estimator.BestExporter):
                     eval_result, self._best_eval_result))
             # copy the checkpoints files *.meta *.index, *.data* each time there is a better result, no cleanup for max amount of files here
             for name in glob.glob(checkpoint_path + '.*'):
-                best_checkpoint_path = os.path.join(export_path, "best_model")
-                if not os.path.exists(best_checkpoint_path):
-                    os.makedirs(best_checkpoint_path)
-                shutil.copy(name, os.path.join(best_checkpoint_path, os.path.basename(name)))
+                if not os.path.exists(export_path):
+                    os.makedirs(export_path)
+                shutil.copy(name, os.path.join(export_path, os.path.basename(name)))
            # also save the text file used by the estimator api to find the best checkpoint
             #with open(os.path.join(best_checkpoint_path, "checkpoint"), 'w') as f:
             #    f.write("model_checkpoint_path: \"{}\"".format(os.path.basename(checkpoint_path)))
