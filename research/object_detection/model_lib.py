@@ -839,6 +839,38 @@ def create_estimator_and_inputs(run_config,
       predict_input_fn=predict_input_fn,
       train_steps=train_steps)
 
+
+class BestCheckpointsExporter(tf.estimator.BestExporter):
+
+    def export(self, estimator, export_path, checkpoint_path, eval_result,
+               is_the_final_export):
+        discard_keys = ["Detections_Left_Groundtruth_Right/0", "Detections_Left_Groundtruth_Right/1",
+                        "Detections_Left_Groundtruth_Right/2", "Detections_Left_Groundtruth_Right/3",
+                        "Detections_Left_Groundtruth_Right/4", "Detections_Left_Groundtruth_Right/5",
+                        "Detections_Left_Groundtruth_Right/6", "Detections_Left_Groundtruth_Right/7",
+                        "Detections_Left_Groundtruth_Right/8", "Detections_Left_Groundtruth_Right/9"]
+        for key in discard_keys:
+            del eval_result[key]
+        if self._best_eval_result is None or \
+                self._compare_fn(self._best_eval_result, eval_result):
+            tf.logging.info(
+                'Exporting a better model ({} instead of {})...'.format(
+                    eval_result, self._best_eval_result))
+            # copy the checkpoints files *.meta *.index, *.data* each time there is a better result, no cleanup for max amount of files here
+            for name in glob.glob(checkpoint_path + '.*'):
+                best_checkpoint_path = os.path.join(checkpoint_path, "best_model")
+                shutil.copy(name, os.path.join(best_checkpoint_path, os.path.basename(name)))
+           # also save the text file used by the estimator api to find the best checkpoint
+            with open(os.path.join(best_checkpoint_path, "checkpoint"), 'w') as f:
+                f.write("model_checkpoint_path: \"{}\"".format(os.path.basename(checkpoint_path)))
+            self._best_eval_result = eval_result
+        else:
+            tf.logging.info(
+                'Keeping the current best model ({} instead of {}).'.format(
+                    self._best_eval_result, eval_result))
+
+
+
 class BestExporter(tf.estimator.BestExporter):
 
     def export(self, estimator, export_path, checkpoint_path, eval_result,
@@ -915,7 +947,7 @@ def create_train_and_eval_specs(train_input_fn,
     final_exporter = tf.estimator.FinalExporter(
         name=exporter_name, serving_input_receiver_fn=predict_input_fn)
 
-    best_exporter = BestExporter(
+    best_exporter = BestCheckpointsExporter(
         name="best_exporter",
         serving_input_receiver_fn=predict_input_fn,
         event_file_pattern='eval_eval/*.tfevents.*',
