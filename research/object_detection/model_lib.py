@@ -25,6 +25,7 @@ import os
 import tensorflow.compat.v1 as tf
 import tensorflow.compat.v2 as tf2
 import tf_slim as slim
+import tensorflow.logging as logging
 
 from object_detection import eval_util
 from object_detection import exporter as exporter_lib
@@ -39,6 +40,7 @@ from object_detection.utils import ops
 from object_detection.utils import shape_utils
 from object_detection.utils import variables_helper
 from object_detection.utils import visualization_utils as vis_utils
+
 
 # pylint: disable=g-import-not-at-top
 try:
@@ -443,7 +445,7 @@ def create_model_fn(detection_model_fn, configs, hparams=None, use_tpu=False,
             features[fields.InputDataFields.true_image_shape]))
 
     if mode == tf.estimator.ModeKeys.TRAIN:
-      load_pretrained = hparams.load_pretrained if hparams else False
+      load_pretrained = True;#hparams.load_pretrained if hparams else False
       if train_config.fine_tune_checkpoint and load_pretrained:
         if not train_config.fine_tune_checkpoint_type:
           # train_config.from_detection_checkpoint field is deprecated. For
@@ -837,6 +839,32 @@ def create_estimator_and_inputs(run_config,
       predict_input_fn=predict_input_fn,
       train_steps=train_steps)
 
+class BestExporter(tf.estimator.BestExporter):
+
+    def export(self, estimator, export_path, checkpoint_path, eval_result,
+               is_the_final_export):
+        discard_keys = ["Detections_Left_Groundtruth_Right/0", "Detections_Left_Groundtruth_Right/1",
+                        "Detections_Left_Groundtruth_Right/2", "Detections_Left_Groundtruth_Right/3",
+                        "Detections_Left_Groundtruth_Right/4", "Detections_Left_Groundtruth_Right/5",
+                        "Detections_Left_Groundtruth_Right/6", "Detections_Left_Groundtruth_Right/7",
+                        "Detections_Left_Groundtruth_Right/8", "Detections_Left_Groundtruth_Right/9"]
+        for key in discard_keys:
+            del eval_result[key]
+        if self._best_eval_result is None or \
+                self._compare_fn(self._best_eval_result, eval_result):
+            logging.info(
+                'Exporting a better model ({} instead of {})...'.format(
+                    eval_result, self._best_eval_result))
+            result = self._saved_model_exporter.export(
+                estimator, export_path, checkpoint_path, eval_result,
+                is_the_final_export)
+            self._best_eval_result = eval_result
+            self._garbage_collect_exports(export_path)
+            return result
+        else:
+            logging.info(
+                'Keeping the current best model ({} instead of {}).'.format(
+                    self._best_eval_result, eval_result))
 
 def create_train_and_eval_specs(train_input_fn,
                                 eval_input_fns,
@@ -881,14 +909,26 @@ def create_train_and_eval_specs(train_input_fn,
       exporter_name = final_exporter_name
     else:
       exporter_name = '{}_{}'.format(final_exporter_name, eval_spec_name)
-    exporter = tf.estimator.FinalExporter(
+    #exporter = tf.estimator.FinalExporter(
+    #    name=exporter_name, serving_input_receiver_fn=predict_input_fn)
+
+    final_exporter = tf.estimator.FinalExporter(
         name=exporter_name, serving_input_receiver_fn=predict_input_fn)
+
+    best_exporter = BestExporter(
+        name="best_exporter",
+        serving_input_receiver_fn=predict_input_fn,
+        event_file_pattern='eval_eval/*.tfevents.*',
+        exports_to_keep=5)
+    exporters = [final_exporter, best_exporter]
+
     eval_specs.append(
         tf.estimator.EvalSpec(
             name=eval_spec_name,
             input_fn=eval_input_fn,
             steps=None,
-            exporters=exporter))
+            exporters=exporters,
+            throttle_secs=0))
 
   if eval_on_train_data:
     eval_specs.append(
@@ -1052,3 +1092,4 @@ def populate_experiment(run_config,
       export_strategies=export_strategies,
       eval_delay_secs=120,
   )
+

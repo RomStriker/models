@@ -25,6 +25,8 @@ import time
 import numpy as np
 from six.moves import range
 import tensorflow.compat.v1 as tf
+import json
+import shutil
 
 import tf_slim as slim
 
@@ -238,7 +240,6 @@ def visualize_detection_results(result_dict,
 
   tf.logging.info('Detection visualizations written to summary with tag %s.',
                   tag)
-
 
 def _run_checkpoint_once(tensor_dict,
                          evaluators=None,

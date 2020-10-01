@@ -17,6 +17,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+import os
 
 from absl import flags
 
@@ -57,9 +58,10 @@ FLAGS = flags.FLAGS
 
 
 def main(unused_argv):
+  os.environ["CUDA_VISIBLE_DEVICES"] = "1"
   flags.mark_flag_as_required('model_dir')
   flags.mark_flag_as_required('pipeline_config_path')
-  config = tf.estimator.RunConfig(model_dir=FLAGS.model_dir)
+  config = tf.estimator.RunConfig(model_dir=FLAGS.model_dir, save_checkpoints_steps=500, keep_checkpoint_max=500)
 
   train_and_eval_dict = model_lib.create_estimator_and_inputs(
       run_config=config,
@@ -106,3 +108,4 @@ def main(unused_argv):
 
 if __name__ == '__main__':
   tf.app.run()
+
