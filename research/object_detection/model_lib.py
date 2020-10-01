@@ -865,8 +865,8 @@ class BestCheckpointsExporter(tf.estimator.BestExporter):
                     os.makedirs(best_checkpoint_path)
                 shutil.copy(name, os.path.join(best_checkpoint_path, os.path.basename(name)))
            # also save the text file used by the estimator api to find the best checkpoint
-            with open(os.path.join(best_checkpoint_path, "checkpoint"), 'w') as f:
-                f.write("model_checkpoint_path: \"{}\"".format(os.path.basename(checkpoint_path)))
+            #with open(os.path.join(best_checkpoint_path, "checkpoint"), 'w') as f:
+            #    f.write("model_checkpoint_path: \"{}\"".format(os.path.basename(checkpoint_path)))
             self._best_eval_result = eval_result
         else:
             tf.logging.info(
