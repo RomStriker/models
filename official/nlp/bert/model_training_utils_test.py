@@ -14,13 +14,10 @@
 # ==============================================================================
 """Tests for official.modeling.training.model_training_utils."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 
 from absl import logging
+from absl.testing import flagsaver
 from absl.testing import parameterized
 from absl.testing.absltest import mock
 import numpy as np
@@ -28,14 +25,18 @@ import tensorflow as tf
 
 from tensorflow.python.distribute import combinations
 from tensorflow.python.distribute import strategy_combinations
+from official.nlp.bert import common_flags
 from official.nlp.bert import model_training_utils
+
+
+common_flags.define_common_bert_flags()
 
 
 def eager_strategy_combinations():
   return combinations.combine(
       distribution=[
           strategy_combinations.default_strategy,
-          strategy_combinations.tpu_strategy,
+          strategy_combinations.cloud_tpu_strategy,
           strategy_combinations.one_device_strategy_gpu,
           strategy_combinations.mirrored_strategy_with_gpu_and_cpu,
           strategy_combinations.mirrored_strategy_with_two_gpus,
@@ -139,9 +140,9 @@ class RecordingCallback(tf.keras.callbacks.Callback):
 
   def __init__(self):
     self.batch_begin = []  # (batch, logs)
-    self.batch_end = []    # (batch, logs)
+    self.batch_end = []  # (batch, logs)
     self.epoch_begin = []  # (epoch, logs)
-    self.epoch_end = []    # (epoch, logs)
+    self.epoch_end = []  # (epoch, logs)
 
   def on_batch_begin(self, batch, logs=None):
     self.batch_begin.append((batch, logs))
@@ -162,6 +163,7 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
     super(ModelTrainingUtilsTest, self).setUp()
     self._model_fn = create_model_fn(input_shape=[128], num_classes=3)
 
+  @flagsaver.flagsaver
   def run_training(self, strategy, model_dir, steps_per_loop, run_eagerly):
     input_fn = create_fake_data_input_fn(
         batch_size=8, features_shape=[128], num_classes=3)
@@ -184,7 +186,7 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
 
   @combinations.generate(eager_strategy_combinations())
   def test_train_eager_single_step(self, distribution):
-    model_dir = self.get_temp_dir()
+    model_dir = self.create_tempdir().full_path
     if isinstance(distribution, tf.distribute.experimental.TPUStrategy):
       with self.assertRaises(ValueError):
         self.run_training(
@@ -195,7 +197,7 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
 
   @combinations.generate(eager_gpu_strategy_combinations())
   def test_train_eager_mixed_precision(self, distribution):
-    model_dir = self.get_temp_dir()
+    model_dir = self.create_tempdir().full_path
     policy = tf.keras.mixed_precision.experimental.Policy('mixed_float16')
     tf.keras.mixed_precision.experimental.set_policy(policy)
     self._model_fn = create_model_fn(
@@ -205,24 +207,26 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
 
   @combinations.generate(eager_strategy_combinations())
   def test_train_check_artifacts(self, distribution):
-    model_dir = self.get_temp_dir()
+    model_dir = self.create_tempdir().full_path
     self.run_training(
         distribution, model_dir, steps_per_loop=10, run_eagerly=False)
 
     # Two checkpoints should be saved after two epochs.
     files = map(os.path.basename,
                 tf.io.gfile.glob(os.path.join(model_dir, 'ctl_step_*index')))
-    self.assertCountEqual(['ctl_step_20.ckpt-1.index',
-                           'ctl_step_40.ckpt-2.index'], files)
+    self.assertCountEqual(
+        ['ctl_step_20.ckpt-1.index', 'ctl_step_40.ckpt-2.index'], files)
 
     # Three submodel checkpoints should be saved after two epochs (one after
     # each epoch plus one final).
-    files = map(os.path.basename,
-                tf.io.gfile.glob(os.path.join(model_dir,
-                                              'my_submodel_name*index')))
-    self.assertCountEqual(['my_submodel_name.ckpt-3.index',
-                           'my_submodel_name_step_20.ckpt-1.index',
-                           'my_submodel_name_step_40.ckpt-2.index'], files)
+    files = map(
+        os.path.basename,
+        tf.io.gfile.glob(os.path.join(model_dir, 'my_submodel_name*index')))
+    self.assertCountEqual([
+        'my_submodel_name.ckpt-3.index',
+        'my_submodel_name_step_20.ckpt-1.index',
+        'my_submodel_name_step_40.ckpt-2.index'
+    ], files)
 
     self.assertNotEmpty(
         tf.io.gfile.glob(
@@ -247,7 +251,7 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
 
   @combinations.generate(eager_strategy_combinations())
   def test_train_check_callbacks(self, distribution):
-    model_dir = self.get_temp_dir()
+    model_dir = self.create_tempdir().full_path
     callback = RecordingCallback()
     callbacks = [callback]
     input_fn = create_fake_data_input_fn(
@@ -298,7 +302,7 @@ class ModelTrainingUtilsTest(tf.test.TestCase, parameterized.TestCase):
                            new_callable=mock.PropertyMock, return_value=False), \
          mock.patch.object(extended.__class__, 'should_save_summary',
                            new_callable=mock.PropertyMock, return_value=False):
-      model_dir = self.get_temp_dir()
+      model_dir = self.create_tempdir().full_path
       self.run_training(
           distribution, model_dir, steps_per_loop=10, run_eagerly=False)
       self.assertEmpty(tf.io.gfile.listdir(model_dir))

@@ -13,11 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 """Utility helpers for Bert2Bert."""
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
-
 from absl import logging
 import tensorflow as tf
 from typing import Optional, Text
@@ -44,6 +39,8 @@ def encoder_common_layers(transformer_block):
       transformer_block._intermediate_dense, transformer_block._output_dense,
       transformer_block._output_layer_norm
   ]
+
+
 # pylint: enable=protected-access
 
 

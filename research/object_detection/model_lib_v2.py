@@ -28,7 +28,6 @@ import tensorflow.compat.v2 as tf2
 from object_detection import eval_util
 from object_detection import inputs
 from object_detection import model_lib
-from object_detection.builders import model_builder
 from object_detection.builders import optimizer_builder
 from object_detection.core import standard_fields as fields
 from object_detection.protos import train_pb2
@@ -104,6 +103,8 @@ def _compute_losses_and_predictions_dicts(
           containing group_of annotations.
         labels[fields.InputDataFields.groundtruth_labeled_classes] is a float32
           k-hot tensor of classes.
+        labels[fields.InputDataFields.groundtruth_track_ids] is a int32
+          tensor of track IDs.
     add_regularization_loss: Whether or not to include the model's
       regularization loss in the losses dictionary.
 
@@ -216,6 +217,8 @@ def eager_train_step(detection_model,
           (v, u) are part-relative normalized surface coordinates.
         labels[fields.InputDataFields.groundtruth_labeled_classes] is a float32
           k-hot tensor of classes.
+        labels[fields.InputDataFields.groundtruth_track_ids] is a int32
+          tensor of track IDs.
     unpad_groundtruth_tensors: A parameter passed to unstack_batch.
     optimizer: The training optimizer that will update the variables.
     learning_rate: The learning rate tensor for the current training step.
@@ -279,7 +282,8 @@ def validate_tf_v2_checkpoint_restore_map(checkpoint_restore_map):
   """Ensure that given dict is a valid TF v2 style restore map.
 
   Args:
-    checkpoint_restore_map: A dict mapping strings to tf.keras.Model objects.
+    checkpoint_restore_map: A nested dict mapping strings to
+      tf.keras.Model objects.
 
   Raises:
     ValueError: If they keys in checkpoint_restore_map are not strings or if
@@ -291,8 +295,12 @@ def validate_tf_v2_checkpoint_restore_map(checkpoint_restore_map):
     if not (isinstance(key, str) and
             (isinstance(value, tf.Module)
              or isinstance(value, tf.train.Checkpoint))):
-      raise TypeError(RESTORE_MAP_ERROR_TEMPLATE.format(
-          key.__class__.__name__, value.__class__.__name__))
+      if isinstance(key, str) and isinstance(value, dict):
+        validate_tf_v2_checkpoint_restore_map(value)
+      else:
+        raise TypeError(
+            RESTORE_MAP_ERROR_TEMPLATE.format(key.__class__.__name__,
+                                              value.__class__.__name__))
 
 
 def is_object_based_checkpoint(checkpoint_path):
@@ -499,7 +507,7 @@ def train_loop(
   # Build the model, optimizer, and training input
   strategy = tf.compat.v2.distribute.get_strategy()
   with strategy.scope():
-    detection_model = model_builder.build(
+    detection_model = MODEL_BUILD_UTIL_MAP['detection_model_fn_base'](
         model_config=model_config, is_training=True)
 
     def train_dataset_fn(input_context):
@@ -695,6 +703,7 @@ def eager_eval_loop(
 
   evaluator_options = eval_util.evaluator_options_from_eval_config(
       eval_config)
+  batch_size = eval_config.batch_size
 
   class_agnostic_category_index = (
       label_map_util.create_class_agnostic_category_index())
@@ -723,7 +732,9 @@ def eager_eval_loop(
     # must be unpadded.
     boxes_shape = (
         labels[fields.InputDataFields.groundtruth_boxes].get_shape().as_list())
-    unpad_groundtruth_tensors = boxes_shape[1] is not None and not use_tpu
+    unpad_groundtruth_tensors = (boxes_shape[1] is not None
+                                 and not use_tpu
+                                 and batch_size == 1)
     labels = model_lib.unstack_batch(
         labels, unpad_groundtruth_tensors=unpad_groundtruth_tensors)
 
@@ -791,7 +802,8 @@ def eager_eval_loop(
       tf.logging.info('Finished eval step %d', i)
 
     use_original_images = fields.InputDataFields.original_image in features
-    if use_original_images and i < eval_config.num_visualizations:
+    if (use_original_images and i < eval_config.num_visualizations
+        and batch_size == 1):
       sbys_image_list = vutils.draw_side_by_side_evaluation_image(
           eval_dict,
           category_index=category_index,
@@ -935,7 +947,7 @@ def eval_continuously(
   if kwargs['use_bfloat16']:
     tf.compat.v2.keras.mixed_precision.experimental.set_policy('mixed_bfloat16')
 
-  detection_model = model_builder.build(
+  detection_model = MODEL_BUILD_UTIL_MAP['detection_model_fn_base'](
       model_config=model_config, is_training=True)
 
   # Create the inputs.
@@ -950,8 +962,6 @@ def eval_continuously(
 
   if eval_index is not None:
     eval_inputs = [eval_inputs[eval_index]]
-    tf.logging.info('eval_index selected - {}'.format(
-        eval_inputs))
 
   global_step = tf.compat.v2.Variable(
       0, trainable=False, dtype=tf.compat.v2.dtypes.int64)

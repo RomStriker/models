@@ -15,24 +15,21 @@
 # ==============================================================================
 """Run NHNet model training and eval."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 
+# Import libraries
 from absl import app
 from absl import flags
 from absl import logging
 from six.moves import zip
 import tensorflow as tf
+from official.common import distribute_utils
 from official.modeling.hyperparams import params_dict
 from official.nlp.nhnet import evaluation
 from official.nlp.nhnet import input_pipeline
 from official.nlp.nhnet import models
 from official.nlp.nhnet import optimizer
 from official.nlp.transformer import metrics as transformer_metrics
-from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 
 FLAGS = flags.FLAGS
@@ -84,6 +81,10 @@ def define_flags():
       default=None,
       help=("a YAML/JSON string or a YAML file which specifies additional "
             "overrides over the default parameters"))
+  # Enables MLIR-based TF/XLA bridge. This is part of a soft rollout and will
+  # eventually be the Google-wide default.
+  flags.DEFINE_bool("enable_mlir_bridge", True,
+                    "Use MLIR TF/XLA bridge (experimental).")
 
 
 # pylint: disable=protected-access
@@ -140,7 +141,6 @@ def train(params, strategy, dataset=None):
         FLAGS.model_type, params, init_checkpoint=FLAGS.init_checkpoint)
     opt = optimizer.create_optimizer(params)
     trainer = Trainer(model, params)
-    model.global_step = opt.iterations
 
     trainer.compile(
         optimizer=opt,
@@ -148,12 +148,13 @@ def train(params, strategy, dataset=None):
     summary_dir = os.path.join(FLAGS.model_dir, "summaries")
     summary_callback = tf.keras.callbacks.TensorBoard(
         summary_dir, update_freq=max(100, FLAGS.steps_per_loop))
-    checkpoint = tf.train.Checkpoint(model=model, optimizer=opt)
+    checkpoint = tf.train.Checkpoint(
+        model=model, optimizer=opt, global_step=opt.iterations)
     checkpoint_manager = tf.train.CheckpointManager(
         checkpoint,
         directory=FLAGS.model_dir,
         max_to_keep=10,
-        step_counter=model.global_step,
+        step_counter=opt.iterations,
         checkpoint_interval=FLAGS.checkpoint_interval)
     if checkpoint_manager.restore_or_initialize():
       logging.info("Training restored from the checkpoints in: %s",
@@ -177,7 +178,10 @@ def train(params, strategy, dataset=None):
 
 def run():
   """Runs NHNet using Keras APIs."""
-  strategy = distribution_utils.get_distribution_strategy(
+  if FLAGS.enable_mlir_bridge:
+    tf.config.experimental.enable_mlir_bridge()
+
+  strategy = distribute_utils.get_distribution_strategy(
       distribution_strategy=FLAGS.distribution_strategy, tpu_address=FLAGS.tpu)
   if strategy:
     logging.info("***** Number of cores used : %d",

@@ -14,10 +14,6 @@
 # ==============================================================================
 """Test Transformer model."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 import re
 import sys
@@ -83,6 +79,13 @@ class TransformerTaskTest(tf.test.TestCase):
   def test_train_no_dist_strat(self):
     if context.num_gpus() >= 2:
       self.skipTest('No need to test 2+ GPUs without a distribution strategy.')
+    t = transformer_main.TransformerTask(FLAGS)
+    t.train()
+
+  def test_train_save_full_model(self):
+    if context.num_gpus() >= 2:
+      self.skipTest('No need to test 2+ GPUs without a distribution strategy.')
+    FLAGS.save_weights_only = False
     t = transformer_main.TransformerTask(FLAGS)
     t.train()
 

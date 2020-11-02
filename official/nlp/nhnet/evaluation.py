@@ -15,12 +15,8 @@
 # ==============================================================================
 """Evaluation for Bert2Bert."""
 
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
-
 import os
+# Import libraries
 from absl import logging
 import numpy as np
 import tensorflow as tf
@@ -113,7 +109,6 @@ def continuous_eval(strategy,
         dtype=tf.int64,
         aggregation=tf.VariableAggregation.ONLY_FIRST_REPLICA,
         shape=[])
-    model.global_step = global_step
 
   @tf.function
   def test_step(inputs):
@@ -148,7 +143,7 @@ def continuous_eval(strategy,
   eval_results = {}
   for latest_checkpoint in tf.train.checkpoints_iterator(
       model_dir, timeout=timeout):
-    checkpoint = tf.train.Checkpoint(model=model)
+    checkpoint = tf.train.Checkpoint(model=model, global_step=global_step)
     checkpoint.restore(latest_checkpoint).expect_partial()
     logging.info("Loaded checkpoint %s", latest_checkpoint)
 
@@ -161,7 +156,7 @@ def continuous_eval(strategy,
           metric.update_state(func(logits.numpy(), targets.numpy()))
 
     with eval_summary_writer.as_default():
-      step = model.global_step.numpy()
+      step = global_step.numpy()
       for metric, _ in metrics_and_funcs:
         eval_results[metric.name] = metric.result().numpy().astype(float)
         tf.summary.scalar(

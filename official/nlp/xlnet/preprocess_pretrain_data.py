@@ -15,14 +15,11 @@
 # ==============================================================================
 """Script to pre-process pre-training data into tfrecords."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import json
 import os
 import random
 
+# Import libraries
 from absl import app
 from absl import flags
 import absl.logging as _logging  # pylint: disable=unused-import

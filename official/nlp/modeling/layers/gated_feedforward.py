@@ -14,10 +14,6 @@
 # ==============================================================================
 """Keras-based gated feedforward layer."""
 # pylint: disable=g-classes-have-attributes
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
 
 import gin
 import tensorflow as tf
@@ -36,19 +32,19 @@ class GatedFeedforward(tf.keras.layers.Layer):
     intermediate_size: Size of the intermediate layer.
     intermediate_activation: Activation for the intermediate layer.
     dropout: Dropout probability for the output dropout.
-    use_gate: Whether to use gated linear units. If True, assuming `GELU` as
-      the activation and omitting bias, will apply
-      `GEGLU(x, W, V, W_2) = (GEGLU(xW) * xV)W2`; if False, will follow
-      "Attention Is All You Need" (https://arxiv.org/abs/1706.03762) paper
-      and apply `FFN(x, W, W_2) = GELU(xW_1)W_2.`
-    num_blocks: The number of feedforward blocks to stack. Each block contains
-      a (gated) linear layer and a fully connected layer followed by dropout,
+    use_gate: Whether to use gated linear units. If True, assuming `GELU` as the
+      activation and omitting bias, will apply `GEGLU(x, W, V, W_2) = (GEGLU(xW)
+      * xV)W2`; if False, will follow
+      "Attention Is All You Need" (https://arxiv.org/abs/1706.03762) paper and
+        apply `FFN(x, W, W_2) = GELU(xW_1)W_2.`
+    num_blocks: The number of feedforward blocks to stack. Each block contains a
+      (gated) linear layer and a fully connected layer followed by dropout,
       layer norm and residual.
     dropout_position: Where to apply the dropout, the value can be either
       `before_residual` or `after_residual`. If `before_residual`, will apply
-      `layer_output = layer_norm(dropout(layer_output) + layer_input)`;
-      if `after residual`, will apply
-      `layer_output = dropout(layer_norm(layer_output + layer_input))`.
+      `layer_output = layer_norm(dropout(layer_output) + layer_input)`; if
+      `after residual`, will apply `layer_output =
+      dropout(layer_norm(layer_output + layer_input))`.
     kernel_initializer: Initializer for dense layer kernels.
     bias_initializer: Initializer for dense layer biases.
     kernel_regularizer: Regularizer for dense layer kernels.
@@ -63,6 +59,7 @@ class GatedFeedforward(tf.keras.layers.Layer):
                intermediate_activation,
                dropout,
                use_gate=True,
+               apply_output_layer_norm=True,
                num_blocks=1,
                dropout_position="before_residual",
                kernel_initializer="glorot_uniform",
@@ -79,6 +76,7 @@ class GatedFeedforward(tf.keras.layers.Layer):
     self._dropout = dropout
     self._use_gate = use_gate
     self._num_blocks = num_blocks
+    self._apply_output_layer_norm = apply_output_layer_norm
     self._dropout_position = dropout_position
     if self._dropout_position not in ("before_residual", "after_residual"):
       raise ValueError(
@@ -124,8 +122,9 @@ class GatedFeedforward(tf.keras.layers.Layer):
               bias_axes="d",
               name="intermediate_%d" % i,
               **common_kwargs))
-      self._intermediate_activation_layers.append(tf.keras.layers.Activation(
-          self._intermediate_activation, dtype=activation_policy))
+      self._intermediate_activation_layers.append(
+          tf.keras.layers.Activation(
+              self._intermediate_activation, dtype=activation_policy))
       if self._use_gate:
         self._gate_dense.append(
             tf.keras.layers.experimental.EinsumDense(
@@ -141,15 +140,15 @@ class GatedFeedforward(tf.keras.layers.Layer):
               bias_axes="d",
               name="output_%d" % i,
               **common_kwargs))
-      self._output_dropout.append(
-          tf.keras.layers.Dropout(rate=self._dropout))
+      self._output_dropout.append(tf.keras.layers.Dropout(rate=self._dropout))
       # Use float32 in layernorm for numeric stability.
-      self._output_layer_norm.append(
-          tf.keras.layers.LayerNormalization(
-              name="output_layer_norm_%d" % i,
-              axis=-1,
-              epsilon=1e-12,
-              dtype=tf.float32))
+      if self._apply_output_layer_norm:
+        self._output_layer_norm.append(
+            tf.keras.layers.LayerNormalization(
+                name="output_layer_norm_%d" % i,
+                axis=-1,
+                epsilon=1e-12,
+                dtype=tf.float32))
 
   def get_config(self):
     config = {
@@ -203,7 +202,8 @@ class GatedFeedforward(tf.keras.layers.Layer):
       # add.
       if layer_input.dtype == tf.float32:
         layer_output = tf.cast(layer_output, tf.float32)
-      layer_output = self._output_layer_norm[i](layer_output + layer_input)
+      if self._apply_output_layer_norm:
+        layer_output = self._output_layer_norm[i](layer_output + layer_input)
       if self._dropout_position == "after_residual":
         layer_output = self._output_dropout[i](layer_output)
 

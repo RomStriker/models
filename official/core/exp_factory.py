@@ -15,8 +15,8 @@
 # ==============================================================================
 """Experiment factory methods."""
 
-from official.modeling.hyperparams import config_definitions as cfg
-from official.utils import registry
+from official.core import config_definitions as cfg
+from official.core import registry
 
 
 _REGISTERED_CONFIGS = {}

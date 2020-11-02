@@ -14,10 +14,6 @@
 # ==============================================================================
 """BERT library to process data for classification task."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import collections
 import csv
 import importlib
@@ -39,7 +35,7 @@ class InputExample(object):
                text_b=None,
                label=None,
                weight=None,
-               int_iden=None):
+               example_id=None):
     """Constructs a InputExample.
 
     Args:
@@ -53,15 +49,15 @@ class InputExample(object):
         examples, but not for test examples.
       weight: (Optional) float. The weight of the example to be used during
         training.
-      int_iden: (Optional) int. The int identification number of example in the
-        corpus.
+      example_id: (Optional) int. The int identification number of example in
+        the corpus.
     """
     self.guid = guid
     self.text_a = text_a
     self.text_b = text_b
     self.label = label
     self.weight = weight
-    self.int_iden = int_iden
+    self.example_id = example_id
 
 
 class InputFeatures(object):
@@ -74,14 +70,14 @@ class InputFeatures(object):
                label_id,
                is_real_example=True,
                weight=None,
-               int_iden=None):
+               example_id=None):
     self.input_ids = input_ids
     self.input_mask = input_mask
     self.segment_ids = segment_ids
     self.label_id = label_id
     self.is_real_example = is_real_example
     self.weight = weight
-    self.int_iden = int_iden
+    self.example_id = example_id
 
 
 class DataProcessor(object):
@@ -122,6 +118,54 @@ class DataProcessor(object):
       for line in reader:
         lines.append(line)
       return lines
+
+
+class AxProcessor(DataProcessor):
+  """Processor for the AX dataset (GLUE diagnostics dataset)."""
+
+  def get_train_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
+
+  def get_dev_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
+
+  def get_test_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "test.tsv")), "test")
+
+  def get_labels(self):
+    """See base class."""
+    return ["contradiction", "entailment", "neutral"]
+
+  @staticmethod
+  def get_processor_name():
+    """See base class."""
+    return "AX"
+
+  def _create_examples(self, lines, set_type):
+    """Creates examples for the training/dev/test sets."""
+    text_a_index = 1 if set_type == "test" else 8
+    text_b_index = 2 if set_type == "test" else 9
+    examples = []
+    for i, line in enumerate(lines):
+      # Skip header.
+      if i == 0:
+        continue
+      guid = "%s-%s" % (set_type, self.process_text_fn(line[0]))
+      text_a = self.process_text_fn(line[text_a_index])
+      text_b = self.process_text_fn(line[text_b_index])
+      if set_type == "test":
+        label = "contradiction"
+      else:
+        label = self.process_text_fn(line[-1])
+      examples.append(
+          InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+    return examples
 
 
 class ColaProcessor(DataProcessor):
@@ -167,6 +211,44 @@ class ColaProcessor(DataProcessor):
         label = self.process_text_fn(line[1])
       examples.append(
           InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
+    return examples
+
+
+class ImdbProcessor(DataProcessor):
+  """Processor for the IMDb dataset."""
+
+  def get_labels(self):
+    return ["neg", "pos"]
+
+  def get_train_examples(self, data_dir):
+    return self._create_examples(os.path.join(data_dir, "train"))
+
+  def get_dev_examples(self, data_dir):
+    return self._create_examples(os.path.join(data_dir, "test"))
+
+  @staticmethod
+  def get_processor_name():
+    """See base class."""
+    return "IMDB"
+
+  def _create_examples(self, data_dir):
+    """Creates examples."""
+    examples = []
+    for label in ["neg", "pos"]:
+      cur_dir = os.path.join(data_dir, label)
+      for filename in tf.io.gfile.listdir(cur_dir):
+        if not filename.endswith("txt"):
+          continue
+
+        if len(examples) % 1000 == 0:
+          logging.info("Loading dev example %d", len(examples))
+
+        path = os.path.join(cur_dir, filename)
+        with tf.io.gfile.GFile(path, "r") as f:
+          text = f.read().strip().replace("<br />", " ")
+        examples.append(
+            InputExample(
+                guid="unused_id", text_a=text, text_b=None, label=label))
     return examples
 
 
@@ -438,12 +520,18 @@ class QqpProcessor(DataProcessor):
       if i == 0:
         continue
       guid = "%s-%s" % (set_type, line[0])
-      try:
-        text_a = line[3]
-        text_b = line[4]
-        label = line[5]
-      except IndexError:
-        continue
+      if set_type == "test":
+        text_a = line[1]
+        text_b = line[2]
+        label = "0"
+      else:
+        # There appear to be some garbage lines in the train dataset.
+        try:
+          text_a = line[3]
+          text_b = line[4]
+          label = line[5]
+        except IndexError:
+          continue
       examples.append(
           InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
     return examples
@@ -982,6 +1070,11 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     if len(tokens_a) > max_seq_length - 2:
       tokens_a = tokens_a[0:(max_seq_length - 2)]
 
+  seg_id_a = 0
+  seg_id_b = 1
+  seg_id_cls = 0
+  seg_id_pad = 0
+
   # The convention in BERT is:
   # (a) For sequence pairs:
   #  tokens:   [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]
@@ -1003,19 +1096,19 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
   tokens = []
   segment_ids = []
   tokens.append("[CLS]")
-  segment_ids.append(0)
+  segment_ids.append(seg_id_cls)
   for token in tokens_a:
     tokens.append(token)
-    segment_ids.append(0)
+    segment_ids.append(seg_id_a)
   tokens.append("[SEP]")
-  segment_ids.append(0)
+  segment_ids.append(seg_id_a)
 
   if tokens_b:
     for token in tokens_b:
       tokens.append(token)
-      segment_ids.append(1)
+      segment_ids.append(seg_id_b)
     tokens.append("[SEP]")
-    segment_ids.append(1)
+    segment_ids.append(seg_id_b)
 
   input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
@@ -1027,7 +1120,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
   while len(input_ids) < max_seq_length:
     input_ids.append(0)
     input_mask.append(0)
-    segment_ids.append(0)
+    segment_ids.append(seg_id_pad)
 
   assert len(input_ids) == max_seq_length
   assert len(input_mask) == max_seq_length
@@ -1044,7 +1137,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     logging.info("segment_ids: %s", " ".join([str(x) for x in segment_ids]))
     logging.info("label: %s (id = %s)", example.label, str(label_id))
     logging.info("weight: %s", example.weight)
-    logging.info("int_iden: %s", str(example.int_iden))
+    logging.info("example_id: %s", example.example_id)
 
   feature = InputFeatures(
       input_ids=input_ids,
@@ -1053,7 +1146,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
       label_id=label_id,
       is_real_example=True,
       weight=example.weight,
-      int_iden=example.int_iden)
+      example_id=example.example_id)
 
   return feature
 
@@ -1096,8 +1189,10 @@ def file_based_convert_examples_to_features(examples,
         [int(feature.is_real_example)])
     if feature.weight is not None:
       features["weight"] = create_float_feature([feature.weight])
-    if feature.int_iden is not None:
-      features["int_iden"] = create_int_feature([feature.int_iden])
+    if feature.example_id is not None:
+      features["example_id"] = create_int_feature([feature.example_id])
+    else:
+      features["example_id"] = create_int_feature([ex_index])
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
     writer.write(tf_example.SerializeToString())

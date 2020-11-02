@@ -138,7 +138,8 @@ class TfExampleDecoder(data_decoder.DataDecoder):
                load_multiclass_scores=False,
                load_context_features=False,
                expand_hierarchy_labels=False,
-               load_dense_pose=False):
+               load_dense_pose=False,
+               load_track_id=False):
     """Constructor sets keys_to_features and items_to_handlers.
 
     Args:
@@ -170,6 +171,7 @@ class TfExampleDecoder(data_decoder.DataDecoder):
         classes, the labels are extended to ancestor. For negative classes,
         the labels are expanded to descendants.
       load_dense_pose: Whether to load DensePose annotations.
+      load_track_id: Whether to load tracking annotations.
 
     Raises:
       ValueError: If `instance_mask_type` option is not one of
@@ -200,6 +202,10 @@ class TfExampleDecoder(data_decoder.DataDecoder):
         'image/class/text':
             tf.VarLenFeature(tf.string),
         'image/class/label':
+            tf.VarLenFeature(tf.int64),
+        'image/neg_category_ids':
+            tf.VarLenFeature(tf.int64),
+        'image/not_exhaustive_category_ids':
             tf.VarLenFeature(tf.int64),
         'image/class/confidence':
             tf.VarLenFeature(tf.float32),
@@ -262,6 +268,10 @@ class TfExampleDecoder(data_decoder.DataDecoder):
         # Image-level labels.
         fields.InputDataFields.groundtruth_image_confidences: (
             slim_example_decoder.Tensor('image/class/confidence')),
+        fields.InputDataFields.groundtruth_verified_neg_classes: (
+            slim_example_decoder.Tensor('image/neg_category_ids')),
+        fields.InputDataFields.groundtruth_not_exhaustive_classes: (
+            slim_example_decoder.Tensor('image/not_exhaustive_category_ids')),
         # Object boxes and classes.
         fields.InputDataFields.groundtruth_boxes: (
             slim_example_decoder.BoundingBox(['ymin', 'xmin', 'ymax', 'xmax'],
@@ -367,6 +377,12 @@ class TfExampleDecoder(data_decoder.DataDecoder):
                    'image/object/densepose/u', 'image/object/densepose/v',
                    'image/object/densepose/num'],
                   self._dense_pose_surface_coordinates))
+    if load_track_id:
+      self.keys_to_features['image/object/track/label'] = (
+          tf.VarLenFeature(tf.int64))
+      self.items_to_handlers[
+          fields.InputDataFields.groundtruth_track_ids] = (
+              slim_example_decoder.Tensor('image/object/track/label'))
 
     if label_map_proto_file:
       # If the label_map_proto is provided, try to use it in conjunction with
@@ -550,6 +566,11 @@ class TfExampleDecoder(data_decoder.DataDecoder):
           dtype=tf.int32)
       tensor_dict[fields.InputDataFields.groundtruth_dp_part_ids] = tf.cast(
           tensor_dict[fields.InputDataFields.groundtruth_dp_part_ids],
+          dtype=tf.int32)
+
+    if fields.InputDataFields.groundtruth_track_ids in tensor_dict:
+      tensor_dict[fields.InputDataFields.groundtruth_track_ids] = tf.cast(
+          tensor_dict[fields.InputDataFields.groundtruth_track_ids],
           dtype=tf.int32)
 
     return tensor_dict

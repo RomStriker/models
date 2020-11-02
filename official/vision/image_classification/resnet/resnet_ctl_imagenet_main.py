@@ -17,15 +17,15 @@
 import math
 import os
 
+# Import libraries
 from absl import app
 from absl import flags
 from absl import logging
 import orbit
 import tensorflow as tf
-
+from official.common import distribute_utils
 from official.modeling import performance
 from official.utils.flags import core as flags_core
-from official.utils.misc import distribution_utils
 from official.utils.misc import keras_utils
 from official.utils.misc import model_helpers
 from official.vision.image_classification.resnet import common
@@ -99,7 +99,8 @@ def run(flags_obj):
   """
   keras_utils.set_session_config(
       enable_xla=flags_obj.enable_xla)
-  performance.set_mixed_precision_policy(flags_core.get_tf_dtype(flags_obj))
+  performance.set_mixed_precision_policy(flags_core.get_tf_dtype(flags_obj),
+                                         use_experimental_api=False)
 
   if tf.config.list_physical_devices('GPU'):
     if flags_obj.tf_gpu_thread_mode:
@@ -116,7 +117,7 @@ def run(flags_obj):
                    else 'channels_last')
   tf.keras.backend.set_image_data_format(data_format)
 
-  strategy = distribution_utils.get_distribution_strategy(
+  strategy = distribute_utils.get_distribution_strategy(
       distribution_strategy=flags_obj.distribution_strategy,
       num_gpus=flags_obj.num_gpus,
       all_reduce_alg=flags_obj.all_reduce_alg,
@@ -143,7 +144,7 @@ def run(flags_obj):
       flags_obj.batch_size,
       flags_obj.log_steps,
       logdir=flags_obj.model_dir if flags_obj.enable_tensorboard else None)
-  with distribution_utils.get_strategy_scope(strategy):
+  with distribute_utils.get_strategy_scope(strategy):
     runnable = resnet_runnable.ResnetRunnable(flags_obj, time_callback,
                                               per_epoch_steps)
 
@@ -167,6 +168,7 @@ def run(flags_obj):
       steps_per_loop=steps_per_loop,
       checkpoint_manager=checkpoint_manager,
       summary_interval=summary_interval,
+      summary_dir=flags_obj.model_dir,
       eval_summary_dir=os.path.join(flags_obj.model_dir, 'eval'))
 
   time_callback.on_train_begin()

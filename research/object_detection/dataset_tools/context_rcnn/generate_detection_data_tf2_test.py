@@ -133,6 +133,7 @@ class GenerateDetectionDataTest(tf.test.TestCase):
     with mock.patch.object(
         model_builder, 'build', autospec=True) as mock_builder:
       mock_builder.return_value = FakeModel()
+      exporter_lib_v2.INPUT_BUILDER_UTIL_MAP['model_build'] = mock_builder
       output_directory = os.path.join(tmp_dir, 'output')
       pipeline_config = pipeline_pb2.TrainEvalPipelineConfig()
       exporter_lib_v2.export_inference_graph(
@@ -212,7 +213,7 @@ class GenerateDetectionDataTest(tf.test.TestCase):
     confidence_threshold = 0.8
     inference_fn = generate_detection_data.GenerateDetectionDataFn(
         saved_model_path, confidence_threshold)
-    inference_fn.start_bundle()
+    inference_fn.setup()
     generated_example = self._create_tf_example()
     self.assertAllEqual(tf.train.Example.FromString(
         generated_example).features.feature['image/object/class/label']

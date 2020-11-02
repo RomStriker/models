@@ -14,11 +14,6 @@
 # ==============================================================================
 """Utilities to save models."""
 
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
-
 import os
 
 from absl import logging
@@ -38,13 +33,13 @@ def export_bert_model(model_export_path: typing.Text,
       checkpoint_dir: Path from which model weights will be loaded, if
         specified.
       restore_model_using_load_weights: Whether to use checkpoint.restore() API
-        for custom checkpoint or to use model.load_weights() API.
-        There are 2 different ways to save checkpoints. One is using
-        tf.train.Checkpoint and another is using Keras model.save_weights().
-        Custom training loop implementation uses tf.train.Checkpoint API
-        and Keras ModelCheckpoint callback internally uses model.save_weights()
-        API. Since these two API's cannot be used toghether, model loading logic
-        must be take into account how model checkpoint was saved.
+        for custom checkpoint or to use model.load_weights() API. There are 2
+        different ways to save checkpoints. One is using tf.train.Checkpoint and
+        another is using Keras model.save_weights(). Custom training loop
+        implementation uses tf.train.Checkpoint API and Keras ModelCheckpoint
+        callback internally uses model.save_weights() API. Since these two API's
+        cannot be used toghether, model loading logic must be take into account
+        how model checkpoint was saved.
 
   Raises:
     ValueError when either model_export_path or model is not specified.

@@ -22,12 +22,11 @@ import orbit
 from seqeval import metrics as seqeval_metrics
 
 import tensorflow as tf
-import tensorflow_hub as hub
 
 from official.core import base_task
+from official.core import config_definitions as cfg
 from official.core import task_factory
 from official.modeling.hyperparams import base_config
-from official.modeling.hyperparams import config_definitions as cfg
 from official.nlp.configs import encoders
 from official.nlp.data import data_loader_factory
 from official.nlp.modeling import models
@@ -37,8 +36,7 @@ from official.nlp.tasks import utils
 @dataclasses.dataclass
 class ModelConfig(base_config.Config):
   """A base span labeler configuration."""
-  encoder: encoders.TransformerEncoderConfig = (
-      encoders.TransformerEncoderConfig())
+  encoder: encoders.EncoderConfig = encoders.EncoderConfig()
   head_dropout: float = 0.1
   head_initializer_range: float = 0.02
 
@@ -85,25 +83,15 @@ def _masked_labels_and_weights(y_true):
 class TaggingTask(base_task.Task):
   """Task object for tagging (e.g., NER or POS)."""
 
-  def __init__(self, params=cfg.TaskConfig, logging_dir=None):
-    super(TaggingTask, self).__init__(params, logging_dir)
-    if params.hub_module_url and params.init_checkpoint:
+  def build_model(self):
+    if self.task_config.hub_module_url and self.task_config.init_checkpoint:
       raise ValueError('At most one of `hub_module_url` and '
                        '`init_checkpoint` can be specified.')
-    if not params.class_names:
-      raise ValueError('TaggingConfig.class_names cannot be empty.')
-
-    if params.hub_module_url:
-      self._hub_module = hub.load(params.hub_module_url)
+    if self.task_config.hub_module_url:
+      encoder_network = utils.get_encoder_from_hub(
+          self.task_config.hub_module_url)
     else:
-      self._hub_module = None
-
-  def build_model(self):
-    if self._hub_module:
-      encoder_network = utils.get_encoder_from_hub(self._hub_module)
-    else:
-      encoder_network = encoders.instantiate_encoder_from_cfg(
-          self.task_config.model.encoder)
+      encoder_network = encoders.build_encoder(self.task_config.model.encoder)
 
     return models.BertTokenClassifier(
         network=encoder_network,
@@ -216,8 +204,9 @@ class TaggingTask(base_task.Task):
     }
 
 
-def predict(task: TaggingTask, params: cfg.DataConfig,
-            model: tf.keras.Model) -> Tuple[List[List[int]], List[int]]:
+def predict(task: TaggingTask,
+            params: cfg.DataConfig,
+            model: tf.keras.Model) -> List[Tuple[int, int, List[int]]]:
   """Predicts on the input data.
 
   Args:
@@ -226,47 +215,50 @@ def predict(task: TaggingTask, params: cfg.DataConfig,
     model: A keras.Model.
 
   Returns:
-    A tuple of `predict_ids` and `sentence_ids`, which are list with length
-      of `num_examples`. Each element in `predict_ids` is a sequence of
-      predicted per-word label id, and each element in `sentence_ids` is the
-      sentence id of the corresponding example.
+    A list of tuple. Each tuple contains `sentence_id`, `sub_sentence_id` and
+      a list of predicted ids.
   """
 
   def predict_step(inputs):
     """Replicated prediction calculation."""
     x, y = inputs
     sentence_ids = x.pop('sentence_id')
+    sub_sentence_ids = x.pop('sub_sentence_id')
     outputs = task.inference_step(x, model)
     predict_ids = outputs['predict_ids']
     label_mask = tf.greater_equal(y, 0)
     return dict(
         predict_ids=predict_ids,
         label_mask=label_mask,
-        sentence_ids=sentence_ids)
+        sentence_ids=sentence_ids,
+        sub_sentence_ids=sub_sentence_ids)
 
   def aggregate_fn(state, outputs):
     """Concatenates model's outputs."""
     if state is None:
-      state = {'predict_ids': [], 'sentence_ids': []}
+      state = []
 
-    cur_predict_ids = state['predict_ids']
-    cur_sentence_ids = state['sentence_ids']
-    for batch_predict_ids, batch_label_mask, batch_sentence_ids in zip(
-        outputs['predict_ids'], outputs['label_mask'],
-        outputs['sentence_ids']):
-      for tmp_predict_ids, tmp_label_mask, tmp_sentence_id in zip(
-          batch_predict_ids.numpy(), batch_label_mask.numpy(),
-          batch_sentence_ids.numpy()):
-        cur_sentence_ids.append(tmp_sentence_id)
-        cur_predict_ids.append([])
+    for (batch_predict_ids, batch_label_mask, batch_sentence_ids,
+         batch_sub_sentence_ids) in zip(outputs['predict_ids'],
+                                        outputs['label_mask'],
+                                        outputs['sentence_ids'],
+                                        outputs['sub_sentence_ids']):
+      for (tmp_predict_ids, tmp_label_mask, tmp_sentence_id,
+           tmp_sub_sentence_id) in zip(batch_predict_ids.numpy(),
+                                       batch_label_mask.numpy(),
+                                       batch_sentence_ids.numpy(),
+                                       batch_sub_sentence_ids.numpy()):
+        real_predict_ids = []
         assert len(tmp_predict_ids) == len(tmp_label_mask)
         for i in range(len(tmp_predict_ids)):
           # Skip the padding label.
           if tmp_label_mask[i]:
-            cur_predict_ids[-1].append(tmp_predict_ids[i])
+            real_predict_ids.append(tmp_predict_ids[i])
+        state.append((tmp_sentence_id, tmp_sub_sentence_id, real_predict_ids))
+
     return state
 
   dataset = orbit.utils.make_distributed_dataset(tf.distribute.get_strategy(),
                                                  task.build_inputs, params)
   outputs = utils.predict(predict_step, aggregate_fn, dataset)
-  return outputs['predict_ids'], outputs['sentence_ids']
+  return sorted(outputs, key=lambda x: (x[0], x[1]))

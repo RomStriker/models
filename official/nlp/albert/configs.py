@@ -14,10 +14,6 @@
 # ==============================================================================
 """The ALBERT configurations."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import six
 
 from official.nlp.bert import configs
@@ -26,10 +22,7 @@ from official.nlp.bert import configs
 class AlbertConfig(configs.BertConfig):
   """Configuration for `ALBERT`."""
 
-  def __init__(self,
-               num_hidden_groups=1,
-               inner_group_num=1,
-               **kwargs):
+  def __init__(self, num_hidden_groups=1, inner_group_num=1, **kwargs):
     """Constructs AlbertConfig.
 
     Args:
@@ -43,8 +36,7 @@ class AlbertConfig(configs.BertConfig):
     super(AlbertConfig, self).__init__(**kwargs)
 
     # TODO(chendouble): 'inner_group_num' and 'num_hidden_groups' are always 1
-    # in the released ALBERT. Support other values in AlbertTransformerEncoder
-    # if needed.
+    # in the released ALBERT. Support other values in AlbertEncoder if needed.
     if inner_group_num != 1 or num_hidden_groups != 1:
       raise ValueError("We only support 'inner_group_num' and "
                        "'num_hidden_groups' as 1.")

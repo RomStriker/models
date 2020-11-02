@@ -13,12 +13,6 @@
 # limitations under the License.
 # ==============================================================================
 """tf.keras Models for NHNet."""
-
-from __future__ import absolute_import
-from __future__ import division
-# from __future__ import google_type_annotations
-from __future__ import print_function
-
 from absl import logging
 import gin
 import tensorflow as tf
@@ -404,7 +398,7 @@ def get_bert2bert_layers(params: configs.BERT2BERTConfig):
   target_ids = tf.keras.layers.Input(
       shape=(None,), name="target_ids", dtype=tf.int32)
   bert_config = utils.get_bert_config_from_params(params)
-  bert_model_layer = networks.TransformerEncoder(
+  bert_model_layer = networks.BertEncoder(
       vocab_size=bert_config.vocab_size,
       hidden_size=bert_config.hidden_size,
       num_layers=bert_config.num_hidden_layers,
@@ -454,7 +448,7 @@ def get_nhnet_layers(params: configs.NHNetConfig):
   segment_ids = tf.keras.layers.Input(
       shape=(None,), name="segment_ids", dtype=tf.int32)
   bert_config = utils.get_bert_config_from_params(params)
-  bert_model_layer = networks.TransformerEncoder(
+  bert_model_layer = networks.BertEncoder(
       vocab_size=bert_config.vocab_size,
       hidden_size=bert_config.hidden_size,
       num_layers=bert_config.num_hidden_layers,
@@ -583,7 +577,6 @@ def create_model(model_type: Text,
   elif model_type == "nhnet":
     return create_nhnet_model(params, init_checkpoint=init_checkpoint)
   elif "transformer" in model_type:
-    return create_transformer_model(
-        params, init_checkpoint=init_checkpoint)
+    return create_transformer_model(params, init_checkpoint=init_checkpoint)
   else:
     raise KeyError("The model type is not defined: %s" % model_type)

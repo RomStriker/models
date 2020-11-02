@@ -13,17 +13,13 @@
 # limitations under the License.
 # ==============================================================================
 """Library to process data for SQuAD 1.1 and SQuAD 2.0."""
-
 # pylint: disable=g-bad-import-order
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import collections
 import copy
 import json
 import math
 import os
+
 import six
 
 from absl import logging
@@ -40,8 +36,8 @@ class SquadExample(object):
   Attributes:
     qas_id: ID of the question-answer pair.
     question_text: Original text for the question.
-    doc_tokens: The list of tokens in the context obtained by splitting
-      on whitespace only.
+    doc_tokens: The list of tokens in the context obtained by splitting on
+      whitespace only.
     orig_answer_text: Original text for the answer.
     start_position: Starting index of the answer in `doc_tokens`.
     end_position: Ending index of the answer in `doc_tokens`.
@@ -209,8 +205,8 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
             #
             # Note that this means for training mode, every example is NOT
             # guaranteed to be preserved.
-            actual_text = " ".join(
-                doc_tokens[start_position:(end_position + 1)])
+            actual_text = " ".join(doc_tokens[start_position:(end_position +
+                                                              1)])
             cleaned_answer_text = " ".join(
                 tokenization.whitespace_tokenize(orig_answer_text))
             if actual_text.find(cleaned_answer_text) == -1:
@@ -520,15 +516,16 @@ def write_predictions(all_examples,
   logging.info("Writing nbest to: %s", (output_nbest_file))
 
   all_predictions, all_nbest_json, scores_diff_json = (
-      postprocess_output(all_examples=all_examples,
-                         all_features=all_features,
-                         all_results=all_results,
-                         n_best_size=n_best_size,
-                         max_answer_length=max_answer_length,
-                         do_lower_case=do_lower_case,
-                         version_2_with_negative=version_2_with_negative,
-                         null_score_diff_threshold=null_score_diff_threshold,
-                         verbose=verbose))
+      postprocess_output(
+          all_examples=all_examples,
+          all_features=all_features,
+          all_results=all_results,
+          n_best_size=n_best_size,
+          max_answer_length=max_answer_length,
+          do_lower_case=do_lower_case,
+          version_2_with_negative=version_2_with_negative,
+          null_score_diff_threshold=null_score_diff_threshold,
+          verbose=verbose))
 
   write_to_json_files(all_predictions, output_prediction_file)
   write_to_json_files(all_nbest_json, output_nbest_file)

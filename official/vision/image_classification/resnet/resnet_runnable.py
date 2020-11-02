@@ -42,7 +42,7 @@ class ResnetRunnable(orbit.StandardTrainer, orbit.StandardEvaluator):
               self.strategy.num_replicas_in_sync))
 
     # As auto rebatching is not supported in
-    # `experimental_distribute_datasets_from_function()` API, which is
+    # `distribute_datasets_from_function()` API, which is
     # required when cloning dataset to multiple workers in eager mode,
     # we use per-replica batch size.
     self.batch_size = int(batch_size / self.strategy.num_replicas_in_sync)
@@ -81,7 +81,8 @@ class ResnetRunnable(orbit.StandardTrainer, orbit.StandardEvaluator):
         self.optimizer,
         use_float16=self.dtype == tf.float16,
         use_graph_rewrite=use_graph_rewrite,
-        loss_scale=flags_core.get_loss_scale(flags_obj, default_for_fp16=128))
+        loss_scale=flags_core.get_loss_scale(flags_obj, default_for_fp16=128),
+        use_experimental_api=False)
 
     self.train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
     self.train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(
@@ -107,9 +108,12 @@ class ResnetRunnable(orbit.StandardTrainer, orbit.StandardEvaluator):
         .datasets_num_private_threads,
         dtype=self.dtype,
         drop_remainder=True)
-    orbit.StandardTrainer.__init__(self, train_dataset,
-                                   flags_obj.use_tf_while_loop,
-                                   flags_obj.use_tf_function)
+    orbit.StandardTrainer.__init__(
+        self,
+        train_dataset,
+        options=orbit.StandardTrainerOptions(
+            use_tf_while_loop=flags_obj.use_tf_while_loop,
+            use_tf_function=flags_obj.use_tf_function))
     if not flags_obj.skip_eval:
       eval_dataset = orbit.utils.make_distributed_dataset(
           self.strategy,
@@ -119,8 +123,11 @@ class ResnetRunnable(orbit.StandardTrainer, orbit.StandardEvaluator):
           batch_size=self.batch_size,
           parse_record_fn=imagenet_preprocessing.parse_record,
           dtype=self.dtype)
-      orbit.StandardEvaluator.__init__(self, eval_dataset,
-                                       flags_obj.use_tf_function)
+      orbit.StandardEvaluator.__init__(
+          self,
+          eval_dataset,
+          options=orbit.StandardEvaluatorOptions(
+              use_tf_function=flags_obj.use_tf_function))
 
   def train_loop_begin(self):
     """See base class."""

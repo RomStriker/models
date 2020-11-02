@@ -23,17 +23,16 @@ import orbit
 from scipy import stats
 from sklearn import metrics as sklearn_metrics
 import tensorflow as tf
-import tensorflow_hub as hub
 
 from official.core import base_task
+from official.core import config_definitions as cfg
 from official.core import task_factory
+from official.modeling import tf_utils
 from official.modeling.hyperparams import base_config
-from official.modeling.hyperparams import config_definitions as cfg
 from official.nlp.configs import encoders
 from official.nlp.data import data_loader_factory
 from official.nlp.modeling import models
 from official.nlp.tasks import utils
-
 
 METRIC_TYPES = frozenset(
     ['accuracy', 'matthews_corrcoef', 'pearson_spearman_corr'])
@@ -44,8 +43,7 @@ class ModelConfig(base_config.Config):
   """A classifier/regressor configuration."""
   num_classes: int = 0
   use_encoder_pooler: bool = False
-  encoder: encoders.TransformerEncoderConfig = (
-      encoders.TransformerEncoderConfig())
+  encoder: encoders.EncoderConfig = encoders.EncoderConfig()
 
 
 @dataclasses.dataclass
@@ -67,34 +65,35 @@ class SentencePredictionConfig(cfg.TaskConfig):
 class SentencePredictionTask(base_task.Task):
   """Task object for sentence_prediction."""
 
-  def __init__(self, params=cfg.TaskConfig, logging_dir=None):
-    super(SentencePredictionTask, self).__init__(params, logging_dir)
-    if params.hub_module_url and params.init_checkpoint:
-      raise ValueError('At most one of `hub_module_url` and '
-                       '`init_checkpoint` can be specified.')
-    if params.hub_module_url:
-      self._hub_module = hub.load(params.hub_module_url)
-    else:
-      self._hub_module = None
-
+  def __init__(self, params: cfg.TaskConfig, logging_dir=None, name=None):
+    super().__init__(params, logging_dir, name=name)
     if params.metric_type not in METRIC_TYPES:
       raise ValueError('Invalid metric_type: {}'.format(params.metric_type))
     self.metric_type = params.metric_type
 
   def build_model(self):
-    if self._hub_module:
-      encoder_network = utils.get_encoder_from_hub(self._hub_module)
+    if self.task_config.hub_module_url and self.task_config.init_checkpoint:
+      raise ValueError('At most one of `hub_module_url` and '
+                       '`init_checkpoint` can be specified.')
+    if self.task_config.hub_module_url:
+      encoder_network = utils.get_encoder_from_hub(
+          self.task_config.hub_module_url)
     else:
-      encoder_network = encoders.instantiate_encoder_from_cfg(
-          self.task_config.model.encoder)
-
-    # Currently, we only support bert-style sentence prediction finetuning.
-    return models.BertClassifier(
-        network=encoder_network,
-        num_classes=self.task_config.model.num_classes,
-        initializer=tf.keras.initializers.TruncatedNormal(
-            stddev=self.task_config.model.encoder.initializer_range),
-        use_encoder_pooler=self.task_config.model.use_encoder_pooler)
+      encoder_network = encoders.build_encoder(self.task_config.model.encoder)
+    encoder_cfg = self.task_config.model.encoder.get()
+    if self.task_config.model.encoder.type == 'xlnet':
+      return models.XLNetClassifier(
+          network=encoder_network,
+          num_classes=self.task_config.model.num_classes,
+          initializer=tf.keras.initializers.RandomNormal(
+              stddev=encoder_cfg.initializer_range))
+    else:
+      return models.BertClassifier(
+          network=encoder_network,
+          num_classes=self.task_config.model.num_classes,
+          initializer=tf.keras.initializers.TruncatedNormal(
+              stddev=encoder_cfg.initializer_range),
+          use_encoder_pooler=self.task_config.model.use_encoder_pooler)
 
   def build_losses(self, labels, model_outputs, aux_losses=None) -> tf.Tensor:
     if self.task_config.model.num_classes == 1:
@@ -105,7 +104,7 @@ class SentencePredictionTask(base_task.Task):
 
     if aux_losses:
       loss += tf.add_n(aux_losses)
-    return tf.reduce_mean(loss)
+    return tf_utils.safe_mean(loss)
 
   def build_inputs(self, params, input_context=None):
     """Returns tf.data.Dataset for sentence_prediction task."""
@@ -138,7 +137,8 @@ class SentencePredictionTask(base_task.Task):
       metrics = [tf.keras.metrics.MeanSquaredError()]
     else:
       metrics = [
-          tf.keras.metrics.SparseCategoricalAccuracy(name='cls_accuracy')]
+          tf.keras.metrics.SparseCategoricalAccuracy(name='cls_accuracy')
+      ]
     return metrics
 
   def process_metrics(self, metrics, labels, model_outputs):
@@ -160,7 +160,8 @@ class SentencePredictionTask(base_task.Task):
     if self.metric_type == 'matthews_corrcoef':
       logs.update({
           'sentence_prediction':
-              tf.expand_dims(tf.math.argmax(outputs, axis=1), axis=0),
+              # Ensure one prediction along batch dimension.
+              tf.expand_dims(tf.math.argmax(outputs, axis=1), axis=1),
           'labels':
               labels,
       })
@@ -176,7 +177,6 @@ class SentencePredictionTask(base_task.Task):
       return None
     if state is None:
       state = {'sentence_prediction': [], 'labels': []}
-    # TODO(b/160712818): Add support for concatenating partial batches.
     state['sentence_prediction'].append(
         np.concatenate([v.numpy() for v in step_outputs['sentence_prediction']],
                        axis=0))
@@ -216,9 +216,8 @@ class SentencePredictionTask(base_task.Task):
     pretrain2finetune_mapping = {
         'encoder': model.checkpoint_items['encoder'],
     }
-    # TODO(b/160251903): Investigate why no pooler dense improves finetuning
-    # accuracies.
     if self.task_config.init_cls_pooler:
+      # This option is valid when use_encoder_pooler is false.
       pretrain2finetune_mapping[
           'next_sentence.pooler_dense'] = model.checkpoint_items[
               'sentence_prediction.pooler_dense']
@@ -248,22 +247,29 @@ def predict(task: SentencePredictionTask, params: cfg.DataConfig,
   def predict_step(inputs):
     """Replicated prediction calculation."""
     x, _ = inputs
+    example_id = x.pop('example_id')
     outputs = task.inference_step(x, model)
     if is_regression:
-      return outputs
+      return dict(example_id=example_id, predictions=outputs)
     else:
-      return tf.argmax(outputs, axis=-1)
+      return dict(
+          example_id=example_id, predictions=tf.argmax(outputs, axis=-1))
 
   def aggregate_fn(state, outputs):
     """Concatenates model's outputs."""
     if state is None:
-      state = {'predictions': []}
+      state = []
 
-    for per_replica_batch_predictions in outputs:
-      state['predictions'].extend(per_replica_batch_predictions)
+    for per_replica_example_id, per_replica_batch_predictions in zip(
+        outputs['example_id'], outputs['predictions']):
+      state.extend(zip(per_replica_example_id, per_replica_batch_predictions))
     return state
 
   dataset = orbit.utils.make_distributed_dataset(tf.distribute.get_strategy(),
                                                  task.build_inputs, params)
   outputs = utils.predict(predict_step, aggregate_fn, dataset)
-  return outputs['predictions']
+
+  # When running on TPU POD, the order of output cannot be maintained,
+  # so we need to sort by example_id.
+  outputs = sorted(outputs, key=lambda x: x[0])
+  return [x[1] for x in outputs]

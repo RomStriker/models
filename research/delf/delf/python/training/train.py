@@ -34,6 +34,7 @@ import tensorflow_probability as tfp
 # Placeholder for internal import. Do not remove this line.
 from delf.python.training.datasets import googlelandmarks as gld
 from delf.python.training.model import delf_model
+from delf.python.training.model import delg_model
 
 FLAGS = flags.FLAGS
 
@@ -57,6 +58,18 @@ flags.DEFINE_boolean('use_augmentation', True,
 flags.DEFINE_string(
     'imagenet_checkpoint', None,
     'ImageNet checkpoint for ResNet backbone. If None, no checkpoint is used.')
+flags.DEFINE_float('attention_loss_weight', 1.0,
+                   'Weight to apply to the attention loss when calculating the '
+                   'total loss of the model.')
+flags.DEFINE_boolean('delg_global_features', False,
+                     'Whether to train a DELG model.')
+flags.DEFINE_float('delg_gem_power', 3.0, 'Power for Generalized Mean pooling.')
+flags.DEFINE_integer('delg_embedding_layer_dim', 2048,
+                     'Size of the FC whitening layer (embedding layer).')
+flags.DEFINE_float('delg_scale_factor_init', 45.25,
+                   ('Initial value of the scaling factor of the cosine logits.'
+                    'The default value is sqrt(2048).'))
+flags.DEFINE_float('delg_arcface_margin', 0.1, 'ArcFace margin.')
 
 
 def _record_accuracy(metric, logits, labels):
@@ -90,7 +103,15 @@ def _attention_summaries(scores, global_step):
 
 def create_model(num_classes):
   """Define DELF model, and initialize classifiers."""
-  model = delf_model.Delf(block3_strides=FLAGS.block3_strides, name='DELF')
+  if FLAGS.delg_global_features:
+    model = delg_model.Delg(block3_strides=FLAGS.block3_strides,
+                            name='DELG',
+                            gem_power=FLAGS.delg_gem_power,
+                            embedding_layer_dim=FLAGS.delg_embedding_layer_dim,
+                            scale_factor_init=FLAGS.delg_scale_factor_init,
+                            arcface_margin=FLAGS.delg_arcface_margin)
+  else:
+    model = delf_model.Delf(block3_strides=FLAGS.block3_strides, name='DELF')
   model.init_classifiers(num_classes)
   return model
 
@@ -234,8 +255,6 @@ def main(argv):
       tf.summary.scalar(
           'image_range/min', tf.reduce_min(images), step=global_step)
 
-      # TODO(andrearaujo): we should try to unify the backprop into a single
-      # function, instead of applying once to descriptor then to attention.
       def _backprop_loss(tape, loss, weights):
         """Backpropogate losses using clipped gradients.
 
@@ -249,52 +268,45 @@ def main(argv):
         optimizer.apply_gradients(zip(clipped, weights))
 
       # Record gradients and loss through backbone.
-      with tf.GradientTape() as desc_tape:
+      with tf.GradientTape() as gradient_tape:
+        # Make a forward pass to calculate prelogits.
+        (desc_prelogits, attn_prelogits, attn_scores,
+         backbone_blocks) = model.global_and_local_forward_pass(images)
 
-        blocks = {}
-        prelogits = model.backbone(
-            images, intermediates_dict=blocks, training=True)
+        # Calculate global loss by applying the descriptor classifier.
+        if FLAGS.delg_global_features:
+          desc_logits = model.desc_classification(desc_prelogits, labels)
+        else:
+          desc_logits = model.desc_classification(desc_prelogits)
+        desc_loss = compute_loss(labels, desc_logits)
 
-        # Report sparsity.
-        activations_zero_fractions = {
-            'sparsity/%s' % k: tf.nn.zero_fraction(v)
-            for k, v in blocks.items()
-        }
-        for k, v in activations_zero_fractions.items():
-          tf.summary.scalar(k, v, step=global_step)
+        # Calculate attention loss by applying the attention block classifier.
+        attn_logits = model.attn_classification(attn_prelogits)
+        attn_loss = compute_loss(labels, attn_logits)
 
-        # Apply descriptor classifier.
-        logits = model.desc_classification(prelogits)
+        # Cumulate global loss and attention loss.
+        total_loss = desc_loss + FLAGS.attention_loss_weight * attn_loss
 
-        desc_loss = compute_loss(labels, logits)
+      # Perform backpropagation through the descriptor layer and attention layer
+      # together.
+      _backprop_loss(gradient_tape, total_loss, model.trainable_weights)
 
-      # Backprop only through backbone weights.
-      _backprop_loss(desc_tape, desc_loss, model.desc_trainable_weights)
-
+      # Report scaling factor for cosine logits for a DELG model.
+      if FLAGS.delg_global_features:
+        tf.summary.scalar('desc/scale_factor', model.scale_factor,
+                          step=global_step)
+      # Report attention and sparsity summaries.
+      _attention_summaries(attn_scores, global_step)
+      activations_zero_fractions = {
+          'sparsity/%s' % k: tf.nn.zero_fraction(v)
+          for k, v in backbone_blocks.items()
+      }
+      for k, v in activations_zero_fractions.items():
+        tf.summary.scalar(k, v, step=global_step)
       # Record descriptor train accuracy.
-      _record_accuracy(desc_train_accuracy, logits, labels)
-
-      # Record gradients and loss through attention block.
-      with tf.GradientTape() as attn_tape:
-        block3 = blocks['block3']  # pytype: disable=key-error
-
-        # Stopping gradients according to DELG paper:
-        # (https://arxiv.org/abs/2001.05027).
-        block3 = tf.stop_gradient(block3)
-
-        prelogits, scores, _ = model.attention(block3, training=True)
-        _attention_summaries(scores, global_step)
-
-        # Apply attention block classifier.
-        logits = model.attn_classification(prelogits)
-
-        attn_loss = compute_loss(labels, logits)
-
-      # Backprop only through attention weights.
-      _backprop_loss(attn_tape, attn_loss, model.attn_trainable_weights)
-
+      _record_accuracy(desc_train_accuracy, desc_logits, labels)
       # Record attention train accuracy.
-      _record_accuracy(attn_train_accuracy, logits, labels)
+      _record_accuracy(attn_train_accuracy, attn_logits, labels)
 
       return desc_loss, attn_loss
 
@@ -308,7 +320,10 @@ def main(argv):
       blocks = {}
       prelogits = model.backbone(
           images, intermediates_dict=blocks, training=False)
-      logits = model.desc_classification(prelogits, training=False)
+      if FLAGS.delg_global_features:
+        logits = model.desc_classification(prelogits, labels, training=False)
+      else:
+        logits = model.desc_classification(prelogits, training=False)
       softmax_probabilities = tf.keras.layers.Softmax()(logits)
 
       validation_loss = loss_object(labels, logits)

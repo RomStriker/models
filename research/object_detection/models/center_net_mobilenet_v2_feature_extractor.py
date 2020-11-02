@@ -53,8 +53,6 @@ class CenterNetMobileNetV2FeatureExtractor(
 
     output = self._network(self._network.input)
 
-    # TODO(nkhadke): Try out MobileNet+FPN next (skip connections are cheap and
-    # should help with performance).
     # MobileNet by itself transforms a 224x224x3 volume into a 7x7x1280, which
     # leads to a stride of 32. We perform upsampling to get it to a target
     # stride of 4.
@@ -101,14 +99,15 @@ class CenterNetMobileNetV2FeatureExtractor(
     """The number of feature outputs returned by the feature extractor."""
     return 1
 
+  @property
+  def supported_sub_model_types(self):
+    return ['detection']
+
   def get_sub_model(self, sub_model_type):
     if sub_model_type == 'detection':
       return self._network
     else:
-      supported_types = ['detection']
-      raise ValueError(
-          ('Sub model {} is not defined for MobileNet.'.format(sub_model_type) +
-           'Supported types are {}.'.format(supported_types)))
+      ValueError('Sub model type "{}" not supported.'.format(sub_model_type))
 
 
 def mobilenet_v2(channel_means, channel_stds, bgr_ordering):
