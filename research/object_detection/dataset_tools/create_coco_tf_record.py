@@ -393,6 +393,7 @@ def _create_tf_record_from_coco_annotations(annotations_file, image_dir,
     images = groundtruth_data['images']
     category_index = label_map_util.create_category_index(
         groundtruth_data['categories'])
+    logging.info(category_index)
 
     annotations_index = {}
     if 'annotations' in groundtruth_data:
@@ -491,7 +492,7 @@ def main(_):
       FLAGS.train_image_dir,
       train_output_path,
       FLAGS.include_masks,
-      num_shards=1,
+      num_shards=20,
       keypoint_annotations_file=FLAGS.train_keypoint_annotations_file,
       densepose_annotations_file=FLAGS.train_densepose_annotations_file,
       remove_non_person_annotations=FLAGS.remove_non_person_annotations,

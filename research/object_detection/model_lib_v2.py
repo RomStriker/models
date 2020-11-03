@@ -381,6 +381,7 @@ def load_fine_tune_checkpoint(
   validate_tf_v2_checkpoint_restore_map(restore_from_objects_dict)
   ckpt = tf.train.Checkpoint(**restore_from_objects_dict)
   ckpt.restore(checkpoint_path).assert_existing_objects_matched()
+  tf.logging("Checkpoint Restored!")
 
 
 def get_filepath(strategy, filepath):
@@ -423,8 +424,8 @@ def train_loop(
     train_steps=None,
     use_tpu=False,
     save_final_config=False,
-    checkpoint_every_n=1000,
-    checkpoint_max_to_keep=7,
+    checkpoint_every_n=250,
+    checkpoint_max_to_keep=2000,
     record_summaries=True,
     **kwargs):
   """Trains a model using eager + functions.
@@ -873,7 +874,7 @@ def eval_continuously(
     postprocess_on_cpu=False,
     model_dir=None,
     checkpoint_dir=None,
-    wait_interval=180,
+    wait_interval=30,
     timeout=3600,
     eval_index=None,
     **kwargs):
