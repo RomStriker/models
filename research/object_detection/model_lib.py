@@ -25,7 +25,7 @@ import os
 import tensorflow.compat.v1 as tf
 import tensorflow.compat.v2 as tf2
 import tf_slim as slim
-import tensorflow.logging as logging
+import tensorflow.compat.v1.logging as logging
 import glob
 import shutil
 
